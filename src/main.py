@@ -99,9 +99,6 @@ class MyService(Service):
         pipeline = TableExtractionPipeline(str_device="cpu", det_device="cpu",
                                            det_model_path="model/pubtables1m_detection_detr_r18.pth",
                                            str_model_path="model/TATR-v1.1-All-msft.pth")
-
-
-
         # Temporary directory and zip buffer setup
         with tempfile.TemporaryDirectory():
             zip_buffer = io.BytesIO()  # In-memory buffer for ZIP file
