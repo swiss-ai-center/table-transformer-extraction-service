@@ -91,7 +91,6 @@ class MyService(Service):
         # The objects in the data variable are always bytes. It is necessary to convert them to the desired type
         # before using them.
         image_bytes = data["image"].data
-        input_type = data["image"].type
         layout_res = json.loads(data["layout"].data)
 
         image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), 1)
@@ -104,9 +103,8 @@ class MyService(Service):
 
 
         # Temporary directory and zip buffer setup
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with tempfile.TemporaryDirectory():
             zip_buffer = io.BytesIO()  # In-memory buffer for ZIP file
-
             # Create a zipfile in write mode
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                 for idx, item in enumerate(layout_res):
