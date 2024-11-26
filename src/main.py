@@ -20,6 +20,15 @@ from contextlib import asynccontextmanager
 
 # Imports required by the service's model
 # TODO: 1. ADD REQUIRED IMPORTS (ALSO IN THE REQUIREMENTS.TXT)
+import easyocr
+import io
+import tempfile
+import zipfile
+import json
+import cv2
+import numpy as np
+from PIL import Image
+from table_transformer.src.inference import TableExtractionPipeline
 
 settings = get_settings()
 
@@ -37,8 +46,8 @@ class MyService(Service):
     def __init__(self):
         super().__init__(
             # TODO: 3. CHANGE THE SERVICE NAME AND SLUG
-            name="My Service",
-            slug="my-service",
+            name="Table Extraction",
+            slug="table-extraction",
             url=settings.service_url,
             summary=api_summary,
             description=api_description,
@@ -52,10 +61,16 @@ class MyService(Service):
                         FieldDescriptionType.IMAGE_JPEG,
                     ],
                 ),
+                FieldDescription(
+                    name="layout",
+                    type=[
+                        FieldDescriptionType.APPLICATION_JSON,
+                    ],
+                ),
             ],
             data_out_fields=[
                 FieldDescription(
-                    name="result", type=[FieldDescriptionType.APPLICATION_JSON]
+                    name="result", type=[FieldDescriptionType.APPLICATION_ZIP]
                 ),
             ],
             tags=[
@@ -64,7 +79,7 @@ class MyService(Service):
                     acronym=ExecutionUnitTagAcronym.IMAGE_PROCESSING,
                 ),
             ],
-            has_ai=False,
+            has_ai=True,
             # OPTIONAL: CHANGE THE DOCS URL TO YOUR SERVICE'S DOCS
             docs_url="https://docs.swiss-ai-center.ch/reference/core-concepts/service/",
         )
@@ -75,13 +90,67 @@ class MyService(Service):
         # NOTE that the data is a dictionary with the keys being the field names set in the data_in_fields
         # The objects in the data variable are always bytes. It is necessary to convert them to the desired type
         # before using them.
-        # raw = data["image"].data
-        # input_type = data["image"].type
-        # ... do something with the raw data
+        image_bytes = data["image"].data
+        input_type = data["image"].type
+        layout_res = json.loads(data["layout"].data)
+
+        image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), 1)
+        image_pil = Image.fromarray(image)
+
+        pipeline = TableExtractionPipeline(str_device="cpu", det_device="cpu",
+                                           det_model_path="model/pubtables1m_detection_detr_r18.pth",
+                                           str_model_path="model/TATR-v1.1-All-msft.pth")
+
+
+
+        # Temporary directory and zip buffer setup
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            zip_buffer = io.BytesIO()  # In-memory buffer for ZIP file
+
+            # Create a zipfile in write mode
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+                for idx, item in enumerate(layout_res):
+                    if item["type"] == "table" and item["score"] > 0.5:  # Confidence threshold
+                        bbox = item["bbox"]
+                        # Crop the image based on the bounding box
+                        cropped_image = image_pil.crop((bbox[0], bbox[1], bbox[2], bbox[3]))
+                        print(cropped_image.size)
+                        cropped_image_rgb = cropped_image.convert('RGB')
+                        cropped_image_np = np.array(cropped_image_rgb)
+
+                        reader = easyocr.Reader(['en'])
+
+                        # img is a numpy array for your RGB image
+                        ocr_result = reader.readtext(cropped_image_np, width_ths=.03)
+
+                        tokens = []
+                        for i, res in enumerate(ocr_result):
+                            tokens.append({
+                                "bbox": list(map(int, [res[0][0][0], res[0][0][1], res[0][2][0], res[0][2][1]])),
+                                "text": res[1],
+                                "flags": 0,
+                                "span_num": i,
+                                "line_num": 0,
+                                "block_num": 0
+                            })
+
+                        # Recognize the table and extract CSV output
+                        out_formats = pipeline.recognize(cropped_image, tokens, out_csv=True)
+                        print(out_formats)
+
+                        if "csv" in out_formats:
+                            # Save CSV content to a file in the zip archive
+                            csv_content = out_formats["csv"][0]
+                            csv_filename = f"table_{idx}.csv"
+                            zf.writestr(csv_filename, csv_content)
+                            print(f"Added {csv_filename} to ZIP archive.")
+
+            # Finalize ZIP file
+            zip_buffer.seek(0)  # Move the pointer to the start of the buffer
 
         # NOTE that the result must be a dictionary with the keys being the field names set in the data_out_fields
         return {
-            "result": TaskData(data=..., type=FieldDescriptionType.APPLICATION_JSON)
+            "result": TaskData(data=zip_buffer.read(), type=FieldDescriptionType.APPLICATION_ZIP)
         }
 
 
@@ -136,18 +205,39 @@ async def lifespan(app: FastAPI):
 
 
 # TODO: 6. CHANGE THE API DESCRIPTION AND SUMMARY
-api_description = """My service
-bla bla bla...
+api_description = """ Inputs:
+- Document Image: An image of the document containing tables (JPEG, PNG).
+- Layout Analysis Results: JSON results from a prior layout analysis model, which provides bounding boxes (bboxes)
+    for potential tables in the document.
+
+Outputs:
+- A ZIP file containing all the detected tables in CSV format.
+
+Model Specifications:
+- Model: Table Transformer
+- Version: TATR-v1.1-All
+- Pretraining Dataset: PubTables-1M
+- Finetuning Dataset: FinTabNet
+- Model Size: 110 MB
+- Reference : [Table Transformer](https://github.com/microsoft/table-transformer)
+
+Capabilities:
+
+    Processes bounding boxes provided by the layout model to crop the regions of interest.
+    Extracts table content and structure from cropped images.
+    Generates well-structured CSV files from table data.
 """
-api_summary = """My service
-bla bla bla...
+api_summary = """ This service provides an advanced table extraction solution for image-based documents,
+tailored for use cases requiring structured tabular data.
+By integrating a pre-trained Table Transformer model,
+the service delivers accurate and efficient table detection and extraction.
 """
 
 # Define the FastAPI application with information
 # TODO: 7. CHANGE THE API TITLE, VERSION, CONTACT AND LICENSE
 app = FastAPI(
     lifespan=lifespan,
-    title="Sample Service API.",
+    title="Table Extraction",
     description=api_description,
     version="0.0.1",
     contact={
