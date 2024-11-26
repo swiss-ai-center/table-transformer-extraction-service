@@ -205,7 +205,8 @@ async def lifespan(app: FastAPI):
 
 
 # TODO: 6. CHANGE THE API DESCRIPTION AND SUMMARY
-api_description = """ Inputs:
+api_description = """
+Inputs:
 - Document Image: An image of the document containing tables (JPEG, PNG).
 - Layout Analysis Results: JSON results from a prior layout analysis model, which provides bounding boxes (bboxes)
     for potential tables in the document.
